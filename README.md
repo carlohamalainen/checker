@@ -3,7 +3,12 @@ checker
 
 Basic utility for computing and checking MD5SUMs on a directory of files. This is NOT production-ready code.
 
-To install:
+If necessary, update cabal:
+
+    cabal update
+    cabal install cabal-install
+
+Then install:
 
     git clone git://github.com/carlohamalainen/checker.git
     cd checker
