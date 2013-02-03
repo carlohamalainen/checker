@@ -1,10 +1,3 @@
-{-
-TODO:
-
-Deal with the case where the pattern "Right md5 <- ..." fails. Use a throwError?
-
--}
-
 import Control.Exception
 import Control.Monad ( forM_, liftM, filterM )
 import Control.Proxy
@@ -42,8 +35,7 @@ computeChecksum fileName = do
     stdout <- liftIO $ readRestOfHandle hout
     stderr <- liftIO $ readRestOfHandle herr
 
-    case length stderr of 0 -> case length (words stdout) of 2 -> return $ Right (head $ words stdout)
-                                                             _ -> return $ Left $ stdout ++ "\n" ++ stderr
+    case length stderr of 0 -> return $ Right (head $ words stdout)
                           _ -> return $ Left stderr
 
 checksumFilename :: FilePath -> ReaderT FilePath IO FilePath
@@ -84,10 +76,11 @@ checkStoredChecksum f = do
 
     if hasChecksum
         then do storedMD5sum         <- liftIO $ liftM rstrip $ readFile md5file
-                Right computedMD5sum <- computeChecksum f
-                if storedMD5sum == computedMD5sum
-                    then liftIO $ putStrLn $ "ok " ++ f
-                    else liftIO $ putStrLn $ "fail " ++ f ++ " " ++ storedMD5sum ++ " != " ++ computedMD5sum
+                blah <- computeChecksum f
+                case blah of (Right computedMD5sum) -> if storedMD5sum == computedMD5sum
+                                                        then liftIO $ putStrLn $ "ok " ++ f
+                                                        else liftIO $ putStrLn $ "fail " ++ f ++ " " ++ storedMD5sum ++ " != " ++ computedMD5sum
+                             (Left  error)          -> liftIO $ putStrLn $ "error: " ++ error
         else liftIO $ putStrLn $ "checksum missing: " ++ f
 
 
