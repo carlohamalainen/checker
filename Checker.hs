@@ -8,7 +8,7 @@ Deal with the case where the pattern "Right md5 <- ..." fails. Use a throwError?
 import Control.Exception
 import Control.Monad ( forM_, liftM, filterM )
 import Control.Proxy
-import Data.String.Utils
+-- import Data.String.Utils
 import System.Directory
 import System.Environment ( getArgs )
 import System.FilePath.Posix
@@ -20,15 +20,8 @@ import Control.Monad.Reader
 
 import Debug.Trace
 
--- Read everything else available on a handle, and return the empty
--- string if we have hit EOF.
-readRestOfHandle :: Handle -> IO String
-readRestOfHandle handle = do
-    ineof <- hIsEOF handle
-    if ineof
-        then return ""
-        else do x <- hGetContents handle
-                return x
+import Utils
+import S3Checksums
 
 -- Compute the checksum (here, the md5sum) of a file. On success
 -- we return the checksum in Right, otherwise we return error output
@@ -109,6 +102,14 @@ go ["--computemissing", path] = runProxy $ getRecursiveContents path >-> useD (\
 go _ = putStrLn "Usage: checker <--checkall|--computemissing> <dir>"
 
 main :: IO ()
-main = getArgs >>= go
+-- main = getArgs >>= go
+main = do
+    x <- s3Lines
+
+    print x
+
+
+boo = do
+    runProxy $ getRecursiveContents "/tb/carlo/camera-rdiff-backup/.md5sums/" >-> useD (\file -> print file)
 
 

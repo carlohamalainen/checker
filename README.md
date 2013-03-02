@@ -3,8 +3,9 @@ checker
 
 Basic utility for computing and checking MD5SUMs on a directory of files. This is NOT production-ready code.
 
-If necessary, update cabal:
+If necessary, install the Haskell platform and update cabal:
 
+    sudo apt-get install haskell-platform
     cabal update
     cabal install cabal-install
 
