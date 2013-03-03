@@ -8,6 +8,8 @@ Deal with the case where the pattern "Right md5 <- ..." fails. Use a throwError?
 import Control.Exception
 import Control.Monad ( forM_, liftM, filterM )
 import Control.Proxy
+import Control.Proxy.Trans.Writer
+
 -- import Data.String.Utils
 import System.Directory
 import System.Environment ( getArgs )
@@ -96,20 +98,23 @@ getRecursiveContents topPath () = runIdentityP $ do
       then getRecursiveContents path ()
       else respond path
 
+-- Note on execWriterT/raiseK: http://ocharles.org.uk/blog/posts/2012-12-16-24-days-of-hackage-pipes.html
+getRecursiveContentsList :: FilePath -> IO [FilePath]
+getRecursiveContentsList path =
+    execWriterT $ runProxy $ raiseK (getRecursiveContents path) >-> toListD >>= return
+
 go :: [String] -> IO ()
-go ["--checkall",       path] = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
-go ["--computemissing", path] = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
-go _ = putStrLn "Usage: checker <--checkall|--computemissing> <dir>"
+go ["--checkall",        path] = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
+go ["--computemissing",  path] = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
+go ["--update-s3-cache"]       = updateS3Cache
+go _ = do
+    putStrLn "Usage: checker <--checkall|--computemissing> <dir>"
+    putStrLn ""
+    putStrLn "or:"
+    putStrLn ""
+    putStrLn "       checker --update-s3-cache"
+    putStrLn ""
 
 main :: IO ()
--- main = getArgs >>= go
-main = do
-    x <- s3Lines
-
-    print x
-
-
-boo = do
-    runProxy $ getRecursiveContents "/tb/carlo/camera-rdiff-backup/.md5sums/" >-> useD (\file -> print file)
-
+main = getArgs >>= go
 

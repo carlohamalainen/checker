@@ -11,6 +11,7 @@ import Text.Parsec.String
 import Data.Functor.Identity
 import Safe (headMay)
 import System.FilePath.Posix
+import qualified Data.Map as DM
 
 import System.IO
 import System.Process
