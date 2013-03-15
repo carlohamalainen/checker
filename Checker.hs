@@ -1,3 +1,5 @@
+import Control.Applicative hiding ((<|>),many)
+
 import Control.Exception
 import Control.Monad ( forM_, liftM, filterM )
 import Control.Proxy
@@ -9,12 +11,16 @@ import System.Environment ( getArgs )
 import System.FilePath.Posix
 import System.IO
 import System.Process
+import qualified System.IO.Strict as S
+
+import qualified Data.ByteString.Lazy as BS
 
 import Control.Monad.Identity
 import Control.Monad.Reader
 
 import Debug.Trace
 
+import qualified Data.Map as DM
 import Utils
 import S3Checksums
 
@@ -33,15 +39,15 @@ computeChecksum fileName = do
     case length stderr of 0 -> return $ Right (head $ words stdout)
                           _ -> return $ Left stderr
 
-checksumFilename :: FilePath -> ReaderT FilePath IO FilePath
-checksumFilename f = do
+computeChecksumFilename :: FilePath -> ReaderT FilePath IO FilePath
+computeChecksumFilename f = do
     topdir <- ask
     return $ topdir </> ".md5sums" </> ((dropWhile (== '/') (drop (length topdir) f)) ++ ".md5sum")
 
 isChecksumMissing :: FilePath -> ReaderT FilePath IO Bool
 isChecksumMissing f = do
     topdir <- ask
-    fileName <- checksumFilename f
+    fileName <- computeChecksumFilename f
     e <- liftM not $ liftIO $ doesFileExist fileName
     return e
 
@@ -49,7 +55,7 @@ computeChecksums :: FilePath -> ReaderT FilePath IO ()
 computeChecksums f = do
     topdir <- ask
 
-    md5file <- checksumFilename f
+    md5file <- computeChecksumFilename f
     let dir = dropFileName md5file
 
     isMissing <- isChecksumMissing f
@@ -66,7 +72,7 @@ checkStoredChecksum :: FilePath -> ReaderT FilePath IO ()
 checkStoredChecksum f = do
     topdir <- ask
 
-    md5file <- checksumFilename f
+    md5file <- computeChecksumFilename f
     hasChecksum <- liftM not $ isChecksumMissing f
 
     if hasChecksum
@@ -96,18 +102,67 @@ getRecursiveContentsList :: FilePath -> IO [FilePath]
 getRecursiveContentsList path =
     execWriterT $ runProxy $ raiseK (getRecursiveContents path) >-> toListD >>= return
 
+-- Read local md5sum info. Assumes that he filename
+-- ends with ".md5sum"! FIXME
+readMd5Info :: FilePath -> IO (FilePath, String)
+readMd5Info path = do
+    let baseName = reverse $ tail $ dropWhile (/= '.') (reverse path)
+    mdvalue <- rstripNewline <$> S.readFile path -- need to be strict here, otherwise we get 'too many open files'
+    return $ (baseName, mdvalue)
+
+getLocalAndS3Report _s3Prefix _localMd5dir = do
+    let s3Prefix = trimTrailingSlash _s3Prefix
+    let path     = trimTrailingSlash _localMd5dir
+
+    localMD5info <- DM.fromList <$> map (\(x, y) -> (trimPathPrefix path x, y)) <$> (getRecursiveContentsList path >>= mapM readMd5Info)
+
+    Right s <- s3Lines -- FIXME deal with Left
+
+    let s3MD5info = DM.fromList $ map (\x -> (trimPathPrefix s3Prefix $ s3Path x, s3Md5sum x)) s
+    let s3MD5infoFull = DM.map fromRight $ DM.filter isRight s3MD5info -- Right == only files that are fully transferred to S3
+
+    return $ (localMD5info, s3MD5infoFull)
+
+-- Report files that are fully stored in both S3 and the local path.
+reportFilesInBoth s3Prefix localPath = do
+    let localMd5Dir = localPath </> ".md5sums"
+
+    (localMD5info, s3MD5infoFull) <- getLocalAndS3Report s3Prefix localMd5Dir
+    forM_ (DM.toList $ DM.intersection localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+
+-- Report files that are fully stored in local but not on S3
+reportFilesInLocalButNotS3 s3Prefix localPath = do
+    let localMd5Dir = localPath </> ".md5sums"
+
+    (localMD5info, s3MD5infoFull) <- getLocalAndS3Report s3Prefix localMd5Dir
+    forM_ (DM.toList $ DM.difference localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+
+-- Report files that are fully stored in S3 not locally
+reportFilesInS3ButNotLocal s3Prefix localPath = do
+    let localMd5Dir = localPath </> ".md5sums"
+
+    (localMD5info, s3MD5infoFull) <- getLocalAndS3Report s3Prefix localMd5Dir
+    forM_ (DM.toList $ DM.difference s3MD5infoFull localMD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+
 go :: [String] -> IO ()
-go ["--checkall",        path] = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
-go ["--computemissing",  path] = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
-go ["--update-s3-cache"]       = updateS3Cache
+go ["--checkall",        path]                          = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
+go ["--computemissing",  path]                          = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
+go ["--update-s3-cache"]                                = updateS3Cache
+go ["--show-in-both", s3Prefix, localPath]              = reportFilesInBoth s3Prefix localPath
+go ["--show-in-local-but-not-s3", s3Prefix, localPath]  = reportFilesInLocalButNotS3 s3Prefix localPath
+go ["--show-in-s3-but-not-local", s3Prefix, localPath]  = reportFilesInS3ButNotLocal s3Prefix localPath
 go _ = do
-    putStrLn "Usage: checker <--checkall|--computemissing> <dir>"
+    putStrLn "Usage:"
     putStrLn ""
-    putStrLn "or:"
+    putStrLn "    checker --checkall        <local dir>"
+    putStrLn "    checker --computemissing> <local dir>"
     putStrLn ""
-    putStrLn "       checker --update-s3-cache"
+    putStrLn "    checker --update-s3-cache"
+    putStrLn ""
+    putStrLn "    checker --show-in-both             <s3 url> <local path>"
+    putStrLn "    checker --show-in-local-but-not-s3 <s3 url> <local path>"
+    putStrLn "    checker --show-in-s3-but-not-local <s3 url> <local path>"
     putStrLn ""
 
 main :: IO ()
 main = getArgs >>= go
-

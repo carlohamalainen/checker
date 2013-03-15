@@ -1,6 +1,11 @@
 module S3Checksums ( updateS3Cache
                    , s3Lines
                    , S3Line
+                   , s3Date
+                   , s3Time
+                   , s3Size
+                   , s3Md5sum
+                   , s3Path
                    ) where  
 
 import Control.Applicative hiding ((<|>),many)
