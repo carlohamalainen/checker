@@ -48,7 +48,7 @@ s3Line = do
     md5 <- try (Left <$> partialMd5sum) <|> (Right <$> (many (noneOf " ")))
     spaces
 
-    path <- many (noneOf " \n")
+    path <- many (noneOf "\n")
     newline
 
     return $ S3Line date time size md5 path
