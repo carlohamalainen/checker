@@ -70,7 +70,7 @@ checkStoredChecksum f = do
     hasChecksum <- liftM not $ isChecksumMissing f
 
     if hasChecksum
-        then do storedMD5sum         <- liftIO $ liftM rstrip $ readFile md5file
+        then do storedMD5sum         <- liftIO $ liftM rstripNewline $ readFile md5file
                 blah <- computeChecksum f
                 case blah of (Right computedMD5sum) -> if storedMD5sum == computedMD5sum
                                                         then liftIO $ putStrLn $ "ok " ++ f
