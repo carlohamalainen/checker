@@ -11,18 +11,14 @@ module S3Checksums ( updateS3Cache
 import Control.Applicative hiding ((<|>),many)
 import Control.Monad
 import Control.Monad.State
-import Text.Parsec
-import Text.Parsec.String
 import Data.Functor.Identity
-import Safe (headMay)
-import System.FilePath.Posix
 import qualified Data.Map as DM
-
+import System.Directory
+import System.FilePath.Posix
 import System.IO
 import System.Process
-
-import System.Directory
-
+import Text.Parsec
+import Text.Parsec.String
 import Utils
 
 data S3Line = S3Line { s3Date       :: String
@@ -39,7 +35,6 @@ partialMd5sum = do
 
     return $ base ++ "-" ++ extension
 
-s3Line :: ParsecT String u Data.Functor.Identity.Identity S3Line
 s3Line = do
     date <- many (noneOf " ")
     spaces

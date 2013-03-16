@@ -1,28 +1,22 @@
 import Control.Applicative hiding ((<|>),many)
-
 import Control.Exception
 import Control.Monad ( forM_, liftM, filterM )
+import Control.Monad.Identity
+import Control.Monad.Reader
 import Control.Proxy
 import Control.Proxy.Trans.Writer
-
--- import Data.String.Utils
 import System.Directory
 import System.Environment ( getArgs )
 import System.FilePath.Posix
 import System.IO
 import System.Process
-import qualified System.IO.Strict as S
+
+import S3Checksums
+import Utils
 
 import qualified Data.ByteString.Lazy as BS
-
-import Control.Monad.Identity
-import Control.Monad.Reader
-
-import Debug.Trace
-
 import qualified Data.Map as DM
-import Utils
-import S3Checksums
+import qualified System.IO.Strict as S
 
 -- Compute the checksum (here, the md5sum) of a file. On success
 -- we return the checksum in Right, otherwise we return error output
