@@ -5,6 +5,7 @@ import Control.Monad.Identity
 import Control.Monad.Reader
 import Control.Proxy
 import Control.Proxy.Trans.Writer
+import Data.Maybe
 import System.Directory
 import System.Environment ( getArgs )
 import System.FilePath.Posix
@@ -118,6 +119,22 @@ getLocalAndS3Report _s3Prefix _localMd5dir = do
                Left e -> do print e
                             return Nothing
 
+-- Report mistmatching MD5sums for files that are fully stored in local and S3.
+reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath = do
+    let localMd5Dir = localPath </> ".md5sums"
+
+    r <- getLocalAndS3Report s3Prefix localMd5Dir
+
+    case r of Just (localMD5info, s3MD5infoFull) -> do let mm = DM.toList $ DM.mapWithKey (\k x -> mismatch k localMD5info s3MD5infoFull) (DM.intersection localMD5info s3MD5infoFull)
+                                                       forM_ (filter (not . isNothing . snd) mm) (\(f, msg) -> putStrLn $ f ++ " " ++ (fromJust msg))
+              _                                  -> do putStrLn "error :("
+
+    where mismatch :: FilePath -> DM.Map FilePath String -> DM.Map FilePath String -> Maybe String
+          mismatch k m1 m2 = case value1 /= value2 of True -> Just $ (fromJust value1 ++ " != " ++ fromJust value2)
+                                                      _    -> Nothing
+              where value1 = DM.lookup k m1
+                    value2 = DM.lookup k m2
+
 -- Report files that are fully stored in both S3 and the local path.
 reportFilesInBoth s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
@@ -146,12 +163,13 @@ reportFilesInS3ButNotLocal s3Prefix localPath = do
               _ -> putStrLn "error :("
 
 go :: [String] -> IO ()
-go ["--checkall",        path]                          = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
-go ["--computemissing",  path]                          = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
-go ["--update-s3-cache"]                                = updateS3Cache
-go ["--show-in-both", s3Prefix, localPath]              = reportFilesInBoth s3Prefix localPath
-go ["--show-in-local-but-not-s3", s3Prefix, localPath]  = reportFilesInLocalButNotS3 s3Prefix localPath
-go ["--show-in-s3-but-not-local", s3Prefix, localPath]  = reportFilesInS3ButNotLocal s3Prefix localPath
+go ["--checkall",        path]                              = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
+go ["--computemissing",  path]                              = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
+go ["--update-s3-cache"]                                    = updateS3Cache
+go ["--check-checksums-local-vs-s3", s3Prefix, localPath]   = reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath
+go ["--show-in-both", s3Prefix, localPath]                  = reportFilesInBoth s3Prefix localPath
+go ["--show-in-local-but-not-s3", s3Prefix, localPath]      = reportFilesInLocalButNotS3 s3Prefix localPath
+go ["--show-in-s3-but-not-local", s3Prefix, localPath]      = reportFilesInS3ButNotLocal s3Prefix localPath
 go _ = do
     putStrLn "Usage:"
     putStrLn ""
@@ -160,9 +178,10 @@ go _ = do
     putStrLn ""
     putStrLn "    checker --update-s3-cache"
     putStrLn ""
-    putStrLn "    checker --show-in-both             <s3 url> <local path>"
-    putStrLn "    checker --show-in-local-but-not-s3 <s3 url> <local path>"
-    putStrLn "    checker --show-in-s3-but-not-local <s3 url> <local path>"
+    putStrLn "    checker --show-in-both                    <s3 url> <local path>"
+    putStrLn "    checker --show-in-local-but-not-s3        <s3 url> <local path>"
+    putStrLn "    checker --show-in-s3-but-not-local        <s3 url> <local path>"
+    putStrLn "    checker --check-checksums-local-vs-s3     <s3 url> <local path>"
     putStrLn ""
 
 main :: IO ()
