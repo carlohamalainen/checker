@@ -110,33 +110,40 @@ getLocalAndS3Report _s3Prefix _localMd5dir = do
 
     localMD5info <- DM.fromList <$> map (\(x, y) -> (trimPathPrefix path x, y)) <$> (getRecursiveContentsList path >>= mapM readMd5Info)
 
-    Right s <- s3Lines -- FIXME deal with Left
+    sp <- s3Lines
 
-    let s3MD5info = DM.fromList $ map (\x -> (trimPathPrefix s3Prefix $ s3Path x, s3Md5sum x)) s
-    let s3MD5infoFull = DM.map fromRight $ DM.filter isRight s3MD5info -- Right == only files that are fully transferred to S3
-
-    return $ (localMD5info, s3MD5infoFull)
+    case sp of Right s -> do let s3MD5info = DM.fromList $ map (\x -> (trimPathPrefix s3Prefix $ s3Path x, s3Md5sum x)) s
+                             let s3MD5infoFull = DM.map fromRight $ DM.filter isRight s3MD5info -- Right == only files that are fully transferred to S3
+                             return $ Just $ (localMD5info, s3MD5infoFull)
+               Left e -> do print e
+                            return Nothing
 
 -- Report files that are fully stored in both S3 and the local path.
 reportFilesInBoth s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
-    (localMD5info, s3MD5infoFull) <- getLocalAndS3Report s3Prefix localMd5Dir
-    forM_ (DM.toList $ DM.intersection localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+    r <- getLocalAndS3Report s3Prefix localMd5Dir
+
+    case r of Just (localMD5info, s3MD5infoFull) -> forM_ (DM.toList $ DM.intersection localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+              _ -> putStrLn "error :("
 
 -- Report files that are fully stored in local but not on S3
 reportFilesInLocalButNotS3 s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
-    (localMD5info, s3MD5infoFull) <- getLocalAndS3Report s3Prefix localMd5Dir
-    forM_ (DM.toList $ DM.difference localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+    r <- getLocalAndS3Report s3Prefix localMd5Dir
+
+    case r of Just (localMD5info, s3MD5infoFull) -> forM_ (DM.toList $ DM.difference localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+              _ -> putStrLn "error :("
 
 -- Report files that are fully stored in S3 not locally
 reportFilesInS3ButNotLocal s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
-    (localMD5info, s3MD5infoFull) <- getLocalAndS3Report s3Prefix localMd5Dir
-    forM_ (DM.toList $ DM.difference s3MD5infoFull localMD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+    r <- getLocalAndS3Report s3Prefix localMd5Dir
+
+    case r of Just (localMD5info, s3MD5infoFull) -> forM_ (DM.toList $ DM.difference s3MD5infoFull localMD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+              _ -> putStrLn "error :("
 
 go :: [String] -> IO ()
 go ["--checkall",        path]                          = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
