@@ -71,3 +71,6 @@ Compare checksums of local vs S3 files, and report on those that do not match:
 
     checker --check-checksums-local-vs-s3     <s3 url> <local path>
     
+For example:
+
+    checker --check-checksums-local-vs-s3     s3://my-s3-name/tmp /home/user/tmp
