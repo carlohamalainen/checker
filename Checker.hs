@@ -105,6 +105,31 @@ readMd5Info path = do
     mdvalue <- rstripNewline <$> S.readFile path -- need to be strict here, otherwise we get 'too many open files'
     return $ (baseName, mdvalue)
 
+fixExtendedEtags = do
+    sp <- s3Lines
+
+    case sp of Right s -> do let etagPaths = map fst $ filter (\(x, y) -> '-' `elem` y) $ map (\x -> (s3Path x, s3Md5sum x)) s :: [String]
+                             forM_ etagPaths (\x -> do let x_tmp = x ++ "_etag_tmp"
+                                                           args1 = ["mv", x, x_tmp]
+                                                           args2 = ["mv", x_tmp, x]
+
+                                                       (Just hin1, Just hout1, Just herr1, pid1) <- createProcess (proc "s3cmd" args1){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
+
+                                                       stdout1 <- readRestOfHandle hout1
+                                                       stderr1 <- readRestOfHandle herr1
+
+                                                       case length stderr1 of 0 -> putStrLn $ x ++ " -> " ++ x_tmp
+                                                                              _ -> error stderr1
+
+                                                       (Just hin2, Just hout2, Just herr2, pid2) <- createProcess (proc "s3cmd" args2){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
+
+                                                       stdout2 <- readRestOfHandle hout2
+                                                       stderr2 <- readRestOfHandle herr2
+
+                                                       case length stderr2 of 0 -> putStrLn $ x_tmp ++ " -> " ++ x
+                                                                              _ -> error stderr2)
+               Left e  -> error $ show e
+
 getLocalAndS3Report _s3Prefix _localMd5dir = do
     let s3Prefix = trimTrailingSlash _s3Prefix
     let path     = trimTrailingSlash _localMd5dir
@@ -113,21 +138,19 @@ getLocalAndS3Report _s3Prefix _localMd5dir = do
 
     sp <- s3Lines
 
-    case sp of Right s -> do let s3MD5info = DM.fromList $ map (\x -> (trimPathPrefix s3Prefix $ s3Path x, s3Md5sum x)) s
-                             let s3MD5infoFull = DM.map fromRight $ DM.filter isRight s3MD5info -- Right == only files that are fully transferred to S3
-                             return $ Just $ (localMD5info, s3MD5infoFull)
-               Left e -> do print e
-                            return Nothing
+    case sp of Right s -> do return $ Just $ (localMD5info, DM.fromList $ map (\x -> (trimPathPrefix s3Prefix $ s3Path x, s3Md5sum x)) s)
+               Left e  -> do print e
+                             return Nothing
 
--- Report mistmatching MD5sums for files that are fully stored in local and S3.
+-- Report mistmatching MD5sums for files that are stored in local and S3.
 reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5infoFull) -> do let mm = DM.toList $ DM.mapWithKey (\k x -> mismatch k localMD5info s3MD5infoFull) (DM.intersection localMD5info s3MD5infoFull)
-                                                       forM_ (filter (not . isNothing . snd) mm) (\(f, msg) -> putStrLn $ f ++ " " ++ (fromJust msg))
-              _                                  -> do putStrLn "error :("
+    case r of Just (localMD5info, s3MD5info) -> do let mm = DM.toList $ DM.mapWithKey (\k x -> mismatch k localMD5info s3MD5info) (DM.intersection localMD5info s3MD5info)
+                                                   forM_ (filter (not . isNothing . snd) mm) (\(f, msg) -> putStrLn $ f ++ " " ++ (fromJust msg))
+              _                              -> do putStrLn "error :("
 
     where mismatch :: FilePath -> DM.Map FilePath String -> DM.Map FilePath String -> Maybe String
           mismatch k m1 m2 = case value1 /= value2 of True -> Just $ (fromJust value1 ++ " != " ++ fromJust value2)
@@ -135,37 +158,38 @@ reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath = do
               where value1 = DM.lookup k m1
                     value2 = DM.lookup k m2
 
--- Report files that are fully stored in both S3 and the local path.
+-- Report files that are stored in both S3 and the local path.
 reportFilesInBoth s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5infoFull) -> forM_ (DM.toList $ DM.intersection localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
-              _ -> putStrLn "error :("
+    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.intersection localMD5info s3MD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+              _                              -> putStrLn "error :("
 
--- Report files that are fully stored in local but not on S3
+-- Report files that are stored in local but not on S3
 reportFilesInLocalButNotS3 s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5infoFull) -> forM_ (DM.toList $ DM.difference localMD5info s3MD5infoFull) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
-              _ -> putStrLn "error :("
+    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.difference localMD5info s3MD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+              _                              -> putStrLn "error :("
 
--- Report files that are fully stored in S3 not locally
+-- Report files that are stored in S3 not locally
 reportFilesInS3ButNotLocal s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5infoFull) -> forM_ (DM.toList $ DM.difference s3MD5infoFull localMD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.difference s3MD5info localMD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
               _ -> putStrLn "error :("
 
 go :: [String] -> IO ()
 go ["--checkall",        path]                              = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
 go ["--computemissing",  path]                              = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
 go ["--update-s3-cache"]                                    = updateS3Cache
+go ["--fix-etags"]                                          = fixExtendedEtags
 go ["--check-checksums-local-vs-s3", s3Prefix, localPath]   = reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath
 go ["--show-in-both", s3Prefix, localPath]                  = reportFilesInBoth s3Prefix localPath
 go ["--show-in-local-but-not-s3", s3Prefix, localPath]      = reportFilesInLocalButNotS3 s3Prefix localPath
@@ -177,6 +201,7 @@ go _ = do
     putStrLn "    checker --computemissing> <local dir>"
     putStrLn ""
     putStrLn "    checker --update-s3-cache"
+    putStrLn "    checker --fix-etags"
     putStrLn ""
     putStrLn "    checker --show-in-both                    <s3 url> <local path>"
     putStrLn "    checker --show-in-local-but-not-s3        <s3 url> <local path>"

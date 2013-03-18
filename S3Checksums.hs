@@ -24,16 +24,9 @@ import Utils
 data S3Line = S3Line { s3Date       :: String
                      , s3Time       :: String
                      , s3Size       :: Integer
-                     , s3Md5sum     :: Either String String -- Left partial, e.g. 7dd139e41cbaba2c88b4ba4e94ccd509-21, Right normal MD5sum
+                     , s3Md5sum     :: String
                      , s3Path       :: String
                      } deriving (Show)
-
-partialMd5sum = do
-    base <- many (noneOf " -")
-    char '-'
-    extension <- many (noneOf " ")
-
-    return $ base ++ "-" ++ extension
 
 s3Line = do
     date <- many (noneOf " ")
@@ -45,7 +38,7 @@ s3Line = do
     size <- read <$> many (noneOf " ")
     spaces
 
-    md5 <- try (Left <$> partialMd5sum) <|> (Right <$> (many (noneOf " ")))
+    md5 <- many (noneOf " ")
     spaces
 
     path <- many (noneOf "\n")
