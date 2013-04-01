@@ -119,10 +119,11 @@ getRecursiveContentsList :: FilePath -> IO [FilePath]
 getRecursiveContentsList path =
     execWriterT $ runProxy $ raiseK (getRecursiveContents path) >-> toListD >>= return
 
--- Read local md5sum info. Assumes that he filename
--- ends with ".md5sum"! FIXME
+-- Read local md5sum info. Assumes that `path` ends with ".md5sum"!
 readMd5Info :: FilePath -> IO (FilePath, String)
 readMd5Info path = do
+    when ((snd $ splitExtension $ last $ splitPath path) /= ".md5sum") (error $ "Path is not an .md5sum file: " ++ path)
+
     let baseName = reverse $ tail $ dropWhile (/= '.') (reverse path)
     mdvalue <- rstripNewline <$> S.readFile path -- need to be strict here, otherwise we get 'too many open files'
     return $ (baseName, mdvalue)
