@@ -1,6 +1,6 @@
 import Control.Applicative hiding ((<|>),many)
 import Control.Exception
-import Control.Monad ( forM_, liftM, filterM )
+import Control.Monad ( forM_, liftM, filterM, when, unless )
 import Control.Monad.Identity
 import Control.Monad.Reader
 import Control.Proxy
@@ -37,14 +37,13 @@ computeChecksum fileName = do
 computeChecksumFilename :: FilePath -> ReaderT FilePath IO FilePath
 computeChecksumFilename f = do
     topdir <- ask
-    return $ topdir </> ".md5sums" </> ((dropWhile (== '/') (drop (length topdir) f)) ++ ".md5sum")
+    return $ topdir </> ".md5sums" </> (dropWhile (== '/') (drop (length topdir) f) ++ ".md5sum")
 
 isChecksumMissing :: FilePath -> ReaderT FilePath IO Bool
 isChecksumMissing f = do
     topdir <- ask
     fileName <- computeChecksumFilename f
-    e <- liftM not $ liftIO $ doesFileExist fileName
-    return e
+    liftM not $ liftIO $ doesFileExist fileName
 
 computeChecksums :: FilePath -> ReaderT FilePath IO ()
 computeChecksums f = do
@@ -55,13 +54,11 @@ computeChecksums f = do
 
     isMissing <- isChecksumMissing f
 
-    if isMissing
-        then do Right md5 <- computeChecksum f
-                liftIO $ createDirectoryIfMissing True dir
-                liftIO $ writeFile md5file (md5 ++ "\n")
-                liftIO $ putStrLn $ f ++ " ==> " ++ md5
-        else return ()
-
+    when isMissing $
+        do Right md5 <- computeChecksum f
+           liftIO $ createDirectoryIfMissing True dir
+           liftIO $ writeFile md5file (md5 ++ "\n")
+           liftIO $ putStrLn $ f ++ " ==> " ++ md5
 
 checkStoredChecksum :: FilePath -> ReaderT FilePath IO ()
 checkStoredChecksum f = do
@@ -73,9 +70,9 @@ checkStoredChecksum f = do
     if hasChecksum
         then do storedMD5sum         <- liftIO $ liftM rstripNewline $ readFile md5file
                 blah <- computeChecksum f
-                case blah of (Right computedMD5sum) -> if storedMD5sum == computedMD5sum
-                                                        then liftIO $ putStrLn $ "ok " ++ f
-                                                        else liftIO $ putStrLn $ "fail " ++ f ++ " " ++ storedMD5sum ++ " != " ++ computedMD5sum
+                case blah of (Right computedMD5sum) -> liftIO $ putStrLn (if storedMD5sum == computedMD5sum
+                                                                            then "ok " ++ f
+                                                                            else "fail " ++ f ++ " " ++ storedMD5sum ++ " != " ++ computedMD5sum)
                              (Left  error)          -> liftIO $ putStrLn $ "error: " ++ error
         else liftIO $ putStrLn $ "checksum missing: " ++ f
 
@@ -86,21 +83,17 @@ checkStoredChecksumIsMissing f = do
     md5file <- computeChecksumFilename f
     hasChecksum <- liftM not $ isChecksumMissing f
 
-    if hasChecksum
-        then return ()
-        else liftIO $ putStrLn $ "checksum missing: " ++ f
+    unless hasChecksum (liftIO $ putStrLn $ "checksum missing: " ++ f)
 
 checkOrphanedChecksum :: FilePath -> ReaderT FilePath IO ()
 checkOrphanedChecksum md5file = do
     topdir <- ask -- e.g. /tmp/foo
 
-    let originalFile = topdir </> (reverse $ drop (length ".md5sum") $ reverse $ joinPath $ drop (1 + (length $ splitPath topdir)) (splitPath md5file))
+    let originalFile = topdir </> reverse (drop (length ".md5sum") $ reverse $ joinPath $ drop (1 + length (splitPath topdir)) (splitPath md5file))
 
     hasOriginalFile <- liftIO $ doesFileExist originalFile
 
-    if hasOriginalFile
-        then return ()
-        else liftIO $ putStrLn $ "orphaned checksum: " ++ md5file
+    unless hasOriginalFile $ liftIO $ putStrLn $ "orphaned checksum: " ++ md5file
 
 -- http://stackoverflow.com/questions/14259229/streaming-recursive-descent-of-a-directory-in-haskell/14261710#14261710
 getRecursiveContents :: (Proxy p) => FilePath -> () -> Producer p FilePath IO ()
@@ -117,16 +110,16 @@ getRecursiveContents topPath () = runIdentityP $ do
 -- Note on execWriterT/raiseK: http://ocharles.org.uk/blog/posts/2012-12-16-24-days-of-hackage-pipes.html
 getRecursiveContentsList :: FilePath -> IO [FilePath]
 getRecursiveContentsList path =
-    execWriterT $ runProxy $ raiseK (getRecursiveContents path) >-> toListD >>= return
+    execWriterT $ runProxy $ raiseK (getRecursiveContents path) >-> toListD
 
 -- Read local md5sum info. Assumes that `path` ends with ".md5sum"!
 readMd5Info :: FilePath -> IO (FilePath, String)
 readMd5Info path = do
-    when ((snd $ splitExtension $ last $ splitPath path) /= ".md5sum") (error $ "Path is not an .md5sum file: " ++ path)
+    when (snd (splitExtension $ last $ splitPath path) /= ".md5sum") (error $ "Path is not an .md5sum file: " ++ path)
 
     let baseName = reverse $ tail $ dropWhile (/= '.') (reverse path)
     mdvalue <- rstripNewline <$> S.readFile path -- need to be strict here, otherwise we get 'too many open files'
-    return $ (baseName, mdvalue)
+    return (baseName, mdvalue)
 
 fixExtendedEtags = do
     sp <- s3Lines
@@ -161,7 +154,7 @@ getLocalAndS3Report _s3Prefix _localMd5dir = do
 
     sp <- s3Lines
 
-    case sp of Right s -> do return $ Just $ (localMD5info, DM.fromList $ map (\x -> (trimPathPrefix s3Prefix $ s3Path x, s3Md5sum x)) s)
+    case sp of Right s -> return $ Just (localMD5info, DM.fromList $ map (\x -> (trimPathPrefix s3Prefix $ s3Path x, s3Md5sum x)) s)
                Left e  -> do print e
                              return Nothing
 
@@ -172,12 +165,12 @@ reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath = do
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
     case r of Just (localMD5info, s3MD5info) -> do let mm = DM.toList $ DM.mapWithKey (\k x -> mismatch k localMD5info s3MD5info) (DM.intersection localMD5info s3MD5info)
-                                                   forM_ (filter (not . isNothing . snd) mm) (\(f, msg) -> putStrLn $ f ++ " " ++ (fromJust msg))
-              _                              -> do putStrLn "error :("
+                                                   forM_ (filter (isJust . snd) mm) (\(f, msg) -> putStrLn $ f ++ " " ++ fromJust msg)
+              _                              -> putStrLn "error :("
 
     where mismatch :: FilePath -> DM.Map FilePath String -> DM.Map FilePath String -> Maybe String
-          mismatch k m1 m2 = case value1 /= value2 of True -> Just $ (fromJust value1 ++ " != " ++ fromJust value2)
-                                                      _    -> Nothing
+          mismatch k m1 m2 = if value1 /= value2 then Just (fromJust value1 ++ " != " ++ fromJust value2)
+                                                 else Nothing
               where value1 = DM.lookup k m1
                     value2 = DM.lookup k m2
 
@@ -187,7 +180,7 @@ reportFilesInBoth s3Prefix localPath = do
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.intersection localMD5info s3MD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.intersection localMD5info s3MD5info) (\x -> putStrLn $ snd x ++ " " ++ fst x)
               _                              -> putStrLn "error :("
 
 -- Report files that are stored in local but not on S3
@@ -196,7 +189,7 @@ reportFilesInLocalButNotS3 s3Prefix localPath = do
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.difference localMD5info s3MD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.difference localMD5info s3MD5info) (\x -> putStrLn $ snd x ++ " " ++ fst x)
               _                              -> putStrLn "error :("
 
 -- Report files that are stored in S3 not locally
@@ -205,7 +198,7 @@ reportFilesInS3ButNotLocal s3Prefix localPath = do
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.difference s3MD5info localMD5info) (\x -> do putStrLn $ (snd x) ++ " " ++ (fst x))
+    case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.difference s3MD5info localMD5info) (\x -> putStrLn $ snd x ++ " " ++ fst x)
               _ -> putStrLn "error :("
 
 go :: [String] -> IO ()

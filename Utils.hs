@@ -31,8 +31,7 @@ readRestOfHandle handle = do
     ineof <- hIsEOF handle
     if ineof
         then return ""
-        else do x <- hGetContents handle
-                return x
+        else hGetContents handle
 
 trimPathPrefix prefix path = dropWhile (== '/') $ drop (length prefix) path
 
