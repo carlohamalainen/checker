@@ -3,6 +3,7 @@ import Control.Exception
 import Control.Monad ( forM_, liftM, filterM, when, unless )
 import Control.Monad.Identity
 import Control.Monad.Reader
+import Control.Monad.Trans.Writer.Lazy
 import Control.Proxy
 import Control.Proxy.Trans.Writer
 import Data.Maybe
@@ -110,7 +111,7 @@ getRecursiveContents topPath () = runIdentityP $ do
 -- Note on execWriterT/raiseK: http://ocharles.org.uk/blog/posts/2012-12-16-24-days-of-hackage-pipes.html
 getRecursiveContentsList :: FilePath -> IO [FilePath]
 getRecursiveContentsList path =
-    execWriterT $ runProxy $ raiseK (getRecursiveContents path) >-> toListD
+    runProxy $ execWriterK $ (getRecursiveContents path) >-> toListD
 
 -- Read local md5sum info. Assumes that `path` ends with ".md5sum"!
 readMd5Info :: FilePath -> IO (FilePath, String)
