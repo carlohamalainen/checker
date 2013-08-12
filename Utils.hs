@@ -33,7 +33,7 @@ readRestOfHandle handle = do
         then return ""
         else hGetContents handle
 
-trimPathPrefix prefix path = dropWhile (== '/') $ drop (length prefix) path
+trimPathPrefix prefix path = dropWhile (== '/') $ drop (length $ trimTrailingSlash prefix) path
 
 trimTrailingSlash path = reverse $ dropWhile (== '/') $ reverse path
 
