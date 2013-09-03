@@ -33,9 +33,12 @@ readRestOfHandle handle = do
         then return ""
         else hGetContents handle
 
-trimPathPrefix prefix path = dropWhile (== '/') $ drop (length $ trimTrailingSlash prefix) path
+-- http://www.haskell.org/pipermail/beginners/2011-April/006856.html
+commonPrefix :: Eq a => [a] -> [a] -> [a]
+commonPrefix a b = map fst (takeWhile (uncurry (==)) (zip a b))
+
+trimPathPrefix prefix path = if [] == commonPrefix (splitPath prefix) (splitPath path)
+                                then error "No common prefix: " ++ (show prefix) ++ " <-> " ++ (show path)
+                                else dropWhile (== '/') $ drop (length $ trimTrailingSlash prefix) path
 
 trimTrailingSlash path = reverse $ dropWhile (== '/') $ reverse path
-
-
-
