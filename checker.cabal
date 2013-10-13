@@ -18,4 +18,4 @@ cabal-version:       >=1.8
 executable checker
   main-is:             Checker.hs
   -- other-modules:       
-  build-depends:       base, MissingH, mtl, process, filepath, directory, pipes, safe, containers, transformers, parsec, bytestring, strict
+  build-depends:       base, MissingH, mtl, process, filepath, directory, pipes <= 3.3.0, safe, containers, transformers, parsec, bytestring, strict
