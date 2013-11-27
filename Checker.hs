@@ -99,8 +99,7 @@ checkOrphanedChecksum md5file = do
 -- http://stackoverflow.com/questions/14259229/streaming-recursive-descent-of-a-directory-in-haskell/14261710#14261710
 getRecursiveContents :: (Proxy p) => FilePath -> () -> Producer p FilePath IO ()
 getRecursiveContents topPath () = runIdentityP $ do
-  names <- lift $ getDirectoryContents topPath
-  let properNames  = filter (`notElem` [".", "..", ".md5sums"]) names
+  properNames <- fmap (filter (`notElem` [".", "..", ".md5sums"])) (lift $ getDirectoryContents topPath)
   forM_ properNames $ \name -> do
     let path = topPath </> name
     isDirectory <- lift $ doesDirectoryExist path
