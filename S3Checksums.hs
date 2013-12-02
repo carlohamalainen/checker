@@ -46,13 +46,9 @@ s3Line = do
 
     return $ S3Line date time size md5 path
 
-s3Lines = do
-    x <- cacheFileName >>= readFile
-    return $ parse (manyTill s3Line (newline >> eof)) "" x
+s3Lines = parse (manyTill s3Line (newline >> eof)) "" <$> (cacheFileName >>= readFile)
 
-cacheFileName = do
-    h <- getHomeDirectory
-    return $ h </> ".s3_lar"
+cacheFileName = (</> ".s3_lar") <$> getHomeDirectory
 
 updateS3Cache = do
     (Just hin, Just hout, Just herr, pid) <- createProcess (proc "s3cmd" ["la", "--list-md5", "--recursive"]){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
@@ -60,7 +56,4 @@ updateS3Cache = do
     stdout <- readRestOfHandle hout
     stderr <- readRestOfHandle herr -- FIXME handle stderr?
 
-    f <- cacheFileName
-
-    writeFile f stdout
-
+    cacheFileName >>= (flip writeFile stdout)
