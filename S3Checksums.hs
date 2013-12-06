@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes #-}
+
 module S3Checksums ( updateS3Cache
                    , s3Lines
                    , S3Line
@@ -28,6 +30,7 @@ data S3Line = S3Line { s3Date       :: String
                      , s3Path       :: String
                      } deriving (Show)
 
+s3Line :: forall u. ParsecT [Char] u Identity S3Line
 s3Line = do
     date <- many (noneOf " ")
     spaces
@@ -46,14 +49,17 @@ s3Line = do
 
     return $ S3Line date time size md5 path
 
+s3Lines :: IO (Either ParseError [S3Line])
 s3Lines = parse (manyTill s3Line (newline >> eof)) "" <$> (cacheFileName >>= readFile)
 
+cacheFileName :: IO FilePath
 cacheFileName = (</> ".s3_lar") <$> getHomeDirectory
 
+updateS3Cache :: IO ()
 updateS3Cache = do
-    (Just hin, Just hout, Just herr, pid) <- createProcess (proc "s3cmd" ["la", "--list-md5", "--recursive"]){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
+    (_, Just hout, _, _) <- createProcess (proc "s3cmd" ["la", "--list-md5", "--recursive"]){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
 
-    stdout <- readRestOfHandle hout
-    stderr <- readRestOfHandle herr -- FIXME handle stderr?
+    stdOut <- readRestOfHandle hout
+    -- stdErr <- readRestOfHandle herr -- FIXME handle stderr?
 
-    cacheFileName >>= (flip writeFile stdout)
+    cacheFileName >>= (flip writeFile stdOut)
