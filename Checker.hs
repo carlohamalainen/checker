@@ -1,24 +1,21 @@
-import Control.Applicative hiding ((<|>),many)
-import Control.Exception
-import Control.Monad ( forM_, liftM, filterM, when, unless )
-import Control.Monad.Identity
-import Control.Monad.Reader
-import Control.Monad.Trans.Writer.Lazy
-import Control.Proxy
-import Control.Proxy.Trans.Writer
-import Data.Maybe
-import System.Directory
-import System.Environment ( getArgs )
-import System.FilePath.Posix
-import System.IO
-import System.Process
+import           Control.Applicative             hiding (many, (<|>))
+import           Control.Exception ()
+import           Control.Monad.Identity
+import           Control.Monad.Reader
+import           Control.Monad.Trans.Writer.Lazy ()
+import           Control.Proxy
+import           Control.Proxy.Trans.Writer
+import           Data.Maybe
+import           System.Directory
+import           System.Environment              (getArgs)
+import           System.FilePath.Posix
+import           System.Process
 
-import S3Checksums
-import Utils
+import           S3Checksums
+import           Utils
 
-import qualified Data.ByteString.Lazy as BS
-import qualified Data.Map as DM
-import qualified System.IO.Strict as S
+import qualified Data.Map                        as DM
+import qualified System.IO.Strict                as S
 
 -- Compute the checksum (here, the md5sum) of a file. On success
 -- we return the checksum in Right, otherwise we return error output
@@ -27,13 +24,13 @@ import qualified System.IO.Strict as S
 ------------------ checkStoredChecksum :: FilePath -> ReaderT FilePath IO ()
 computeChecksum :: FilePath -> ReaderT FilePath IO (Either String String)
 computeChecksum fileName = do
-    (Just hin, Just hout, Just herr, pid) <- liftIO $ createProcess (proc "md5sum" [fileName]){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
+    (Just _, Just hout, Just herr, _) <- liftIO $ createProcess (proc "md5sum" [fileName]){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
 
-    stdout <- liftIO $ readRestOfHandle hout
-    stderr <- liftIO $ readRestOfHandle herr
+    stdOut <- liftIO $ readRestOfHandle hout
+    stdErr <- liftIO $ readRestOfHandle herr
 
-    case length stderr of 0 -> return $ Right (head $ words stdout)
-                          _ -> return $ Left stderr
+    case length stdErr of 0 -> return $ Right (head $ words stdOut)
+                          _ -> return $ Left stdErr
 
 computeChecksumFilename :: FilePath -> ReaderT FilePath IO FilePath
 computeChecksumFilename f = do
@@ -42,14 +39,11 @@ computeChecksumFilename f = do
 
 isChecksumMissing :: FilePath -> ReaderT FilePath IO Bool
 isChecksumMissing f = do
-    topdir <- ask
     fileName <- computeChecksumFilename f
     liftM not $ liftIO $ doesFileExist fileName
 
 computeChecksums :: FilePath -> ReaderT FilePath IO ()
 computeChecksums f = do
-    topdir <- ask
-
     md5file <- computeChecksumFilename f
     let dir = dropFileName md5file
 
@@ -63,8 +57,6 @@ computeChecksums f = do
 
 checkStoredChecksum :: FilePath -> ReaderT FilePath IO ()
 checkStoredChecksum f = do
-    topdir <- ask
-
     md5file <- computeChecksumFilename f
     hasChecksum <- liftM not $ isChecksumMissing f
 
@@ -74,14 +66,11 @@ checkStoredChecksum f = do
                 case blah of (Right computedMD5sum) -> liftIO $ putStrLn (if storedMD5sum == computedMD5sum
                                                                             then "ok " ++ f
                                                                             else "fail " ++ f ++ " " ++ storedMD5sum ++ " != " ++ computedMD5sum)
-                             (Left  error)          -> liftIO $ putStrLn $ "error: " ++ error
+                             (Left  e)              -> liftIO $ putStrLn $ "error: " ++ e
         else liftIO $ putStrLn $ "checksum missing: " ++ f
 
 checkStoredChecksumIsMissing :: FilePath -> ReaderT FilePath IO ()
 checkStoredChecksumIsMissing f = do
-    topdir <- ask
-
-    md5file <- computeChecksumFilename f
     hasChecksum <- liftM not $ isChecksumMissing f
 
     unless hasChecksum (liftIO $ putStrLn $ "checksum missing: " ++ f)
@@ -121,31 +110,36 @@ readMd5Info path = do
     mdvalue <- rstripNewline <$> S.readFile path -- need to be strict here, otherwise we get 'too many open files'
     return (baseName, mdvalue)
 
+fixExtendedEtags :: IO ()
 fixExtendedEtags = do
     sp <- s3Lines
 
-    case sp of Right s -> do let etagPaths = map fst $ filter (\(x, y) -> '-' `elem` y) $ map (\x -> (s3Path x, s3Md5sum x)) s :: [String]
+    case sp of Right s -> do let etagPaths = map fst $ filter (\(_, y) -> '-' `elem` y) $ map (\x -> (s3Path x, s3Md5sum x)) s :: [String]
                              forM_ etagPaths (\x -> do let x_tmp = x ++ "_etag_tmp"
                                                            args1 = ["mv", x, x_tmp]
                                                            args2 = ["mv", x_tmp, x]
 
-                                                       (Just hin1, Just hout1, Just herr1, pid1) <- createProcess (proc "s3cmd" args1){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
+                                                       (Just _, Just hout1, Just herr1, _) <- createProcess (proc "s3cmd" args1){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
 
-                                                       stdout1 <- readRestOfHandle hout1
+                                                       _       <- readRestOfHandle hout1
                                                        stderr1 <- readRestOfHandle herr1
 
                                                        case length stderr1 of 0 -> putStrLn $ x ++ " -> " ++ x_tmp
                                                                               _ -> error stderr1
 
-                                                       (Just hin2, Just hout2, Just herr2, pid2) <- createProcess (proc "s3cmd" args2){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
+                                                       (Just _, Just hout2, Just herr2, _) <- createProcess (proc "s3cmd" args2){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
 
-                                                       stdout2 <- readRestOfHandle hout2
+                                                       _       <- readRestOfHandle hout2
                                                        stderr2 <- readRestOfHandle herr2
 
                                                        case length stderr2 of 0 -> putStrLn $ x_tmp ++ " -> " ++ x
                                                                               _ -> error stderr2)
                Left e  -> error $ show e
 
+getLocalAndS3Report
+  :: String
+     -> FilePath
+     -> IO (Maybe (DM.Map FilePath String, DM.Map FilePath String))
 getLocalAndS3Report _s3Prefix _localMd5dir = do
     let s3Prefix = trimTrailingSlash _s3Prefix
     let path     = trimTrailingSlash _localMd5dir
@@ -159,12 +153,13 @@ getLocalAndS3Report _s3Prefix _localMd5dir = do
                              return Nothing
 
 -- Report mistmatching MD5sums for files that are stored in local and S3.
+reportMismatchingMd5sumsLocalVsS3 :: [Char] -> [Char] -> IO ()
 reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
     r <- getLocalAndS3Report s3Prefix localMd5Dir
 
-    case r of Just (localMD5info, s3MD5info) -> do let mm = DM.toList $ DM.mapWithKey (\k x -> mismatch k localMD5info s3MD5info) (DM.intersection localMD5info s3MD5info)
+    case r of Just (localMD5info, s3MD5info) -> do let mm = DM.toList $ DM.mapWithKey (\k _ -> mismatch k localMD5info s3MD5info) (DM.intersection localMD5info s3MD5info)
                                                    forM_ (filter (isJust . snd) mm) (\(f, msg) -> putStrLn $ f ++ " " ++ fromJust msg)
               _                              -> putStrLn "error :("
 
@@ -175,6 +170,7 @@ reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath = do
                     value2 = DM.lookup k m2
 
 -- Report files that are stored in both S3 and the local path.
+reportFilesInBoth :: String -> FilePath -> IO ()
 reportFilesInBoth s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
@@ -184,6 +180,7 @@ reportFilesInBoth s3Prefix localPath = do
               _                              -> putStrLn "error :("
 
 -- Report files that are stored in local but not on S3
+reportFilesInLocalButNotS3 :: String -> FilePath -> IO ()
 reportFilesInLocalButNotS3 s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
@@ -193,6 +190,7 @@ reportFilesInLocalButNotS3 s3Prefix localPath = do
               _                              -> putStrLn "error :("
 
 -- Report files that are stored in S3 not locally
+reportFilesInS3ButNotLocal :: String -> FilePath -> IO ()
 reportFilesInS3ButNotLocal s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 

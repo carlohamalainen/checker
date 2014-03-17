@@ -7,14 +7,14 @@ module Utils ( readRestOfHandle
              , trimTrailingSlash 
              ) where
 
-import Control.Exception
-import Control.Monad.Identity
-import Control.Monad.Reader
-import Control.Proxy
-import System.Directory
+import Control.Exception ()
+import Control.Monad.Identity ()
+import Control.Monad.Reader ()
+import Control.Proxy ()
+import System.Directory ()
 import System.FilePath.Posix
 import System.IO
-import System.Process
+import System.Process ()
 
 -- Strip spaces and tab characters.
 strip :: String -> String

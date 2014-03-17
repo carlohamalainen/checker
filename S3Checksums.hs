@@ -11,16 +11,16 @@ module S3Checksums ( updateS3Cache
                    ) where  
 
 import Control.Applicative hiding ((<|>),many)
-import Control.Monad
-import Control.Monad.State
+import Control.Monad ()
+import Control.Monad.State ()
 import Data.Functor.Identity
-import qualified Data.Map as DM
+-- import qualified Data.Map as DM
 import System.Directory
 import System.FilePath.Posix
-import System.IO
+import System.IO ()
 import System.Process
 import Text.Parsec
-import Text.Parsec.String
+import Text.Parsec.String ()
 import Utils
 
 data S3Line = S3Line { s3Date       :: String
@@ -30,7 +30,7 @@ data S3Line = S3Line { s3Date       :: String
                      , s3Path       :: String
                      } deriving (Show)
 
-s3Line :: forall u. ParsecT [Char] u Identity S3Line
+s3Line :: forall u. ParsecT String u Identity S3Line
 s3Line = do
     date <- many (noneOf " ")
     spaces
