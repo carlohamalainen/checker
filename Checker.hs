@@ -21,8 +21,7 @@ import qualified System.IO.Strict                as S
 -- we return the checksum in Right, otherwise we return error output
 -- in Left.
 
------------------- checkStoredChecksum :: FilePath -> ReaderT FilePath IO ()
-computeChecksum :: FilePath -> ReaderT FilePath IO (Either String String)
+computeChecksum :: FilePath -> IO (Either String String)
 computeChecksum fileName = do
     (Just _, Just hout, Just herr, _) <- liftIO $ createProcess (proc "md5sum" [fileName]){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
 
@@ -50,7 +49,7 @@ computeChecksums f = do
     isMissing <- isChecksumMissing f
 
     when isMissing $
-        do Right md5 <- computeChecksum f
+        do Right md5 <- liftIO $ computeChecksum f
            liftIO $ createDirectoryIfMissing True dir
            liftIO $ writeFile md5file (md5 ++ "\n")
            liftIO $ putStrLn $ f ++ " ==> " ++ md5
@@ -62,7 +61,7 @@ checkStoredChecksum f = do
 
     if hasChecksum
         then do storedMD5sum         <- liftIO $ liftM rstripNewline $ readFile md5file
-                blah <- computeChecksum f
+                blah <- liftIO $ computeChecksum f
                 case blah of (Right computedMD5sum) -> liftIO $ putStrLn (if storedMD5sum == computedMD5sum
                                                                             then "ok " ++ f
                                                                             else "fail " ++ f ++ " " ++ storedMD5sum ++ " != " ++ computedMD5sum)
@@ -153,7 +152,7 @@ getLocalAndS3Report _s3Prefix _localMd5dir = do
                              return Nothing
 
 -- Report mistmatching MD5sums for files that are stored in local and S3.
-reportMismatchingMd5sumsLocalVsS3 :: [Char] -> [Char] -> IO ()
+reportMismatchingMd5sumsLocalVsS3 :: String -> String -> IO ()
 reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath = do
     let localMd5Dir = localPath </> ".md5sums"
 
