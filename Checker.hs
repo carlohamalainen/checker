@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 import           Control.Applicative             hiding (many, (<|>))
 import           Control.Exception ()
 import           Control.Monad.Identity
@@ -21,6 +23,12 @@ import qualified System.IO.Strict                as S
 -- we return the checksum in Right, otherwise we return error output
 -- in Left.
 
+validCharacters :: [Char]
+validCharacters = " +-./0123456789ABCDFGIJLMNOPRSUV_abcdefghijklmnoprstuvwxy~"
+
+isValidPath :: FilePath -> Bool
+isValidPath f = all (`elem` validCharacters) f
+
 computeChecksum :: FilePath -> IO (Either String String)
 computeChecksum fileName = do
     (Just _, Just hout, Just herr, _) <- liftIO $ createProcess (proc "md5sum" [fileName]){ std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
@@ -33,6 +41,8 @@ computeChecksum fileName = do
 
 computeChecksumFilename :: FilePath -> ReaderT FilePath IO FilePath
 computeChecksumFilename f = do
+    when (not $ isValidPath f) $ error $ "Path contains invalid characters: " ++ f
+
     topdir <- ask
     return $ topdir </> ".md5sums" </> (dropWhile (== '/') (drop (length topdir) f) ++ ".md5sum")
 
@@ -78,7 +88,7 @@ checkOrphanedChecksum :: FilePath -> ReaderT FilePath IO ()
 checkOrphanedChecksum md5file = do
     topdir <- ask -- e.g. /tmp/foo
 
-    let originalFile = topdir </> reverse (drop (length ".md5sum") $ reverse $ joinPath $ drop (1 + length (splitPath topdir)) (splitPath md5file))
+    let originalFile = topdir </> reverse (drop (length (".md5sum" :: String)) $ reverse $ joinPath $ drop (1 + length (splitPath topdir)) (splitPath md5file))
 
     hasOriginalFile <- liftIO $ doesFileExist originalFile
 
