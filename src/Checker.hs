@@ -1,4 +1,18 @@
-{-# LANGUAGE OverloadedStrings #-}
+module Checker ( computeChecksum
+               , computeChecksums
+               , checkStoredChecksum
+               , isMatch
+               , validCharacters
+               , getRecursiveContents
+               , checkStoredChecksumIsMissing
+               , checkOrphanedChecksum
+               , updateS3Cache
+               , fixExtendedEtags
+               , reportMismatchingMd5sumsLocalVsS3
+               , reportFilesInBoth
+               , reportFilesInLocalButNotS3
+               , reportFilesInS3ButNotLocal
+               ) where
 
 import           Control.Applicative             hiding (many, (<|>))
 import           Control.Exception ()
@@ -27,7 +41,7 @@ validCharacters :: [Char]
 validCharacters = " +-./0123456789ABCDFGIJLMNOPRSUV_abcdefghijklmnoprstuvwxy~"
 
 isValidPath :: FilePath -> Bool
-isValidPath f = all (`elem` validCharacters) f
+isValidPath = all (`elem` validCharacters)
 
 computeChecksum :: FilePath -> IO (Either String String)
 computeChecksum fileName = do
@@ -41,30 +55,60 @@ computeChecksum fileName = do
 
 computeChecksumFilename :: FilePath -> ReaderT FilePath IO FilePath
 computeChecksumFilename f = do
-    when (not $ isValidPath f) $ error $ "Path contains invalid characters: " ++ f
+    unless (isValidPath f) $ error $ "Path contains invalid characters: " ++ f
 
     topdir <- ask
-    return $ topdir </> ".md5sums" </> (dropWhile (== '/') (drop (length topdir) f) ++ ".md5sum")
+    let cf = topdir </> ".md5sums" </> (dropWhile (== '/') (drop (length topdir) f) ++ ".md5sum")
+
+    when (255 < maximum (map length $ splitDirectories cf)) $ error $ "File is too long to construct md5sum filename: " ++ f
+
+    return cf
 
 isChecksumMissing :: FilePath -> ReaderT FilePath IO Bool
 isChecksumMissing f = do
     fileName <- computeChecksumFilename f
     liftM not $ liftIO $ doesFileExist fileName
 
-computeChecksums :: FilePath -> ReaderT FilePath IO ()
+data ComputeResult = ComputeSkipped FilePath
+                   | ComputeCreated FilePath String
+                   deriving Eq
+
+instance Show ComputeResult where
+    show (ComputeSkipped f) = "skipped: " ++ f
+    show (ComputeCreated f md5) = f ++ " ==> " ++ md5
+
+computeChecksums :: FilePath -> ReaderT FilePath IO ComputeResult
 computeChecksums f = do
     md5file <- computeChecksumFilename f
     let dir = dropFileName md5file
 
     isMissing <- isChecksumMissing f
 
-    when isMissing $
-        do Right md5 <- liftIO $ computeChecksum f
-           liftIO $ createDirectoryIfMissing True dir
-           liftIO $ writeFile md5file (md5 ++ "\n")
-           liftIO $ putStrLn $ f ++ " ==> " ++ md5
+    if isMissing
+        then do
+            Right md5 <- liftIO $ computeChecksum f
+            liftIO $ createDirectoryIfMissing True dir
+            liftIO $ writeFile md5file (md5 ++ "\n")
+            return $ ComputeCreated f md5
+        else return $ ComputeSkipped f
 
-checkStoredChecksum :: FilePath -> ReaderT FilePath IO ()
+data ChecksumResult = ChecksumMatches FilePath
+                    | ChecksumDiff FilePath String String
+                    | ChecksumError FilePath String
+                    | ChecksumMissing FilePath
+                    deriving Eq
+
+isMatch :: ChecksumResult -> Bool
+isMatch (ChecksumMatches _) = True
+isMatch _ = False
+
+instance Show ChecksumResult where
+    show (ChecksumMatches f)                = "ok: " ++ f
+    show (ChecksumDiff f stored computed)   = "fail " ++ f ++ " " ++ stored ++ " != " ++ computed
+    show (ChecksumError f e)                = "error computing checksum for: " ++ f ++ " " ++ e
+    show (ChecksumMissing f)                = "checksum missing: " ++ f
+
+checkStoredChecksum :: FilePath -> ReaderT FilePath IO ChecksumResult
 checkStoredChecksum f = do
     md5file <- computeChecksumFilename f
     hasChecksum <- liftM not $ isChecksumMissing f
@@ -72,11 +116,11 @@ checkStoredChecksum f = do
     if hasChecksum
         then do storedMD5sum         <- liftIO $ liftM rstripNewline $ readFile md5file
                 blah <- liftIO $ computeChecksum f
-                case blah of (Right computedMD5sum) -> liftIO $ putStrLn (if storedMD5sum == computedMD5sum
-                                                                            then "ok " ++ f
-                                                                            else "fail " ++ f ++ " " ++ storedMD5sum ++ " != " ++ computedMD5sum)
-                             (Left  e)              -> liftIO $ putStrLn $ "error: " ++ e
-        else liftIO $ putStrLn $ "checksum missing: " ++ f
+                return (case blah of (Right computedMD5sum) -> if storedMD5sum == computedMD5sum
+                                                                    then ChecksumMatches f
+                                                                    else ChecksumDiff f storedMD5sum computedMD5sum
+                                     (Left  e)              -> ChecksumError f e)
+        else return $ ChecksumMissing f
 
 checkStoredChecksumIsMissing :: FilePath -> ReaderT FilePath IO ()
 checkStoredChecksumIsMissing f = do
@@ -207,40 +251,3 @@ reportFilesInS3ButNotLocal s3Prefix localPath = do
 
     case r of Just (localMD5info, s3MD5info) -> forM_ (DM.toList $ DM.difference s3MD5info localMD5info) (\x -> putStrLn $ snd x ++ " " ++ fst x)
               _ -> putStrLn "error :("
-
-go :: [String] -> IO ()
-go ["--checkall",        path]                              = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksum file) path)
-go ["--computemissing",  path]                              = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (computeChecksums    file) path)
-
-go ["--show-locals-missing-checksum",  path]                = runProxy $ getRecursiveContents path >-> useD (\file -> runReaderT (checkStoredChecksumIsMissing file) path)
-go ["--show-local-orphaned-checksums", path]                = runProxy $ getRecursiveContents (path </> ".md5sums") >-> useD (\file -> runReaderT (checkOrphanedChecksum file) path)
-
-
-go ["--update-s3-cache"]                                    = updateS3Cache
-go ["--fix-etags"]                                          = fixExtendedEtags
-
-go ["--check-checksums-local-vs-s3", s3Prefix, localPath]   = reportMismatchingMd5sumsLocalVsS3 s3Prefix localPath
-go ["--show-in-both", s3Prefix, localPath]                  = reportFilesInBoth s3Prefix localPath
-go ["--show-in-local-but-not-s3", s3Prefix, localPath]      = reportFilesInLocalButNotS3 s3Prefix localPath
-go ["--show-in-s3-but-not-local", s3Prefix, localPath]      = reportFilesInS3ButNotLocal s3Prefix localPath
-
-go _ = do
-    putStrLn "Usage:"
-    putStrLn ""
-    putStrLn "    checker --checkall        <local dir>"
-    putStrLn "    checker --computemissing  <local dir>"
-    putStrLn ""
-    putStrLn "    checker --show-locals-missing-checksum   <local dir>"
-    putStrLn "    checker --show-local-orphaned-checksums  <local dir>"
-    putStrLn ""
-    putStrLn "    checker --update-s3-cache"
-    putStrLn "    checker --fix-etags"
-    putStrLn ""
-    putStrLn "    checker --show-in-both                    <s3 url> <local path>"
-    putStrLn "    checker --show-in-local-but-not-s3        <s3 url> <local path>"
-    putStrLn "    checker --show-in-s3-but-not-local        <s3 url> <local path>"
-    putStrLn "    checker --check-checksums-local-vs-s3     <s3 url> <local path>"
-    putStrLn ""
-
-main :: IO ()
-main = getArgs >>= go
